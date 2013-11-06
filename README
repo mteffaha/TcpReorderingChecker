@@ -1,0 +1,13 @@
+Wellcome to TcpPacketTReorederingChecker.
+for more information about the project visit the github page at : https://github.com/mteffaha/TcpReorderingChecker
+
+the associated Makefile has the following targets:
+	
+	all		Compile the whole project
+	clean		delete all object files
+	veryclean	delete all object files and binary
+
+
+Work done by:
+	TEFFAHA Mortadha<teffaha@polytech.unice.fr>
+	DONG Huinan<dong@polytech.unice.fr>

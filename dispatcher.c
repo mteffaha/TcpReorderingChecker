@@ -7,20 +7,25 @@
 #include "dispatcher.h"
 #include <stdlib.h>
 
-int id=0;
+int id=0; // the packet ID(as read from the pcap file)
 
 
 packetEntry* g_entries = NULL;		// entries that were recieved 
-packetEntry* g_currentEntries=NULL; 	// entries that are currently being handled  by the dispatcher
-packetEntry* g_saveEntries=NULL;	// entries that will be saved on the csv	
-int initial_reciever_seq = -1;
-int initial_sender_seq = -1;
-u_int32_t recieverADR = -1;
-int expected_seq = -1;
+int initial_reciever_seq = -1;		// the initial recieved sequence number used to calculate the relative sequence number
+int initial_sender_seq = -1;		// same as initial_recieved_seq but for the sender
+u_int32_t recieverADR = -1;		// the reciever adress used to filter out packets
+int expected_seq = -1;			// variable used to store the exepected sequence number at each iteration
 
 void dispatch_handler(u_char* user,const struct pcap_pkthdr* header,const u_char* data){
 	struct iphdr ipHeader;
 	unsigned int ihl=0; // Internet Header Length
+
+
+	id++;
+	/*
+		============================================== Initialisation part
+	*/
+
 	packetEntry* entry = (packetEntry*) malloc(sizeof(packetEntry));
 	// We Fetch the field type located in the last 2 bytes of the ethernet layer
 	u_int16_t type;
@@ -58,7 +63,15 @@ void dispatch_handler(u_char* user,const struct pcap_pkthdr* header,const u_char
 	entry->tcpHeader->window = ntohs(entry->tcpHeader->window);
 	entry->tcpHeader->check = ntohs(entry->tcpHeader->check);
 	entry->tcpHeader->urg_ptr = ntohs(entry->tcpHeader->urg_ptr);
+
 	
+	/*
+		========================================= Delay detection Part
+	*/
+
+
+
+
 	// We get the initial sequence number,and the reciever adresse 
 	if(entry->tcpHeader->syn&&entry->tcpHeader->ack){
 		initial_reciever_seq = entry->tcpHeader->seq;
@@ -67,63 +80,83 @@ void dispatch_handler(u_char* user,const struct pcap_pkthdr* header,const u_char
 	if(entry->tcpHeader->syn && ! entry->tcpHeader->ack){
 		initial_sender_seq =entry->tcpHeader->seq;
 	}
+
+
+
+	// we calculate the length of data (needed to calculate the next sequence number)
 	length = ntohs(ipHeader.tot_len)-((ihl*4)+(entry->tcpHeader->doff*4));
 
+
+
+	/*	
+		We Skip the Three way handshake 
+
+	*/
+
+	if(expected_seq == -1){ // we initialse the first recieved packet to the length of data which happens to be it's sequence number
+		expected_seq = length;
+	}
+	
 	if(entry->daddr == recieverADR){ // sent packet
-	// we remove packets that does not contain client data (Syn , RST, FIN)
-	if((entry->tcpHeader->seq-initial_reciever_seq)== 0 || (entry->tcpHeader->seq-initial_reciever_seq)==1){ // we skip the three way handshake
-		free(entry);
-		return;
-	}
+		// we remove packets that does not contain client data (Syn , RST, FIN)
+		if((entry->tcpHeader->seq-initial_reciever_seq)== 0 || (entry->tcpHeader->seq-initial_reciever_seq)==1){ // we skip the three way handshake
+			free(entry);
+			return;
+		}
 	}else{
-	if((entry->tcpHeader->seq-initial_sender_seq)== 0 || (entry->tcpHeader->seq-initial_sender_seq)==1){ // we skip the three way handshake
-		free(entry);
-		return;
+		if((entry->tcpHeader->seq-initial_sender_seq)== 0 || (entry->tcpHeader->seq-initial_sender_seq)==1){ // we skip the three way handshake
+			free(entry);
+			return;
+		}
+
+
 	}
 
 	
-	}
-	if(entry->daddr == recieverADR){ // sent packet
-	if((entry->tcpHeader->seq-initial_reciever_seq) != expected_seq){
-		printf("$");
-	}else{
-		printf("-");
-	}
-		
-	printf("<%d,%d,%d>[IHL:%d,IdSrc:%x,IpDest:%x,",(entry->tcpHeader->seq-initial_sender_seq),id,length,ihl,entry->saddr,entry->daddr);
-	printf("SourcePort:%d,",entry->tcpHeader->source);
-	printf("DestPort:%d,",entry->tcpHeader->dest);
-	printf("DataOffset:%d,",entry->tcpHeader->doff);
-	printf("(ACK:%d,SYN:%d)",entry->tcpHeader->ack,entry->tcpHeader->syn);
-	printf("Sequence:%d,",(entry->tcpHeader->seq-initial_reciever_seq));
-	printf("Acknowledgement:%d,",(entry->tcpHeader->ack_seq-initial_sender_seq));
-	printf("Window:%d,",entry->tcpHeader->window);
-		
-	printf(",Length:%d]\n",length);
-	
-	
-	}
-	else{ // recieved packet
-	expected_seq = (entry->tcpHeader->ack_seq-initial_reciever_seq);
-	printf("[Expected: %d,id:%d]",expected_seq,id);	
-	printf("[IHL:%d,IdSrc:%x,IpDest:%x,",ihl,entry->saddr,entry->daddr);
-	printf("SourcePort:%d,",entry->tcpHeader->source);
-	printf("DestPort:%d,",entry->tcpHeader->dest);
-	printf("DataOffset:%d,",entry->tcpHeader->doff);
-	printf("(ACK:%d,SYN:%d)",entry->tcpHeader->ack,entry->tcpHeader->syn);
-	printf("Sequence:%d,",(entry->tcpHeader->seq-initial_sender_seq));
-	printf("Acknowledgement:%d,",(entry->tcpHeader->ack_seq-initial_reciever_seq));
-	printf("Window:%d,",entry->tcpHeader->window);
-		
-	printf(",Length:%d]\n",length);
-	}
 
-	// We check for reordering
 
-	//add_Entry(&g_currentEntries,&entry);
-	
-	id++;
-	
+	/*
+		we filter only the recieved packet since only they, are relative to our probléme
+	*/
+	if(entry->daddr == recieverADR){ // recieved packet
+		if((entry->tcpHeader->seq-initial_reciever_seq) < expected_seq){ // if sequence number earlier (delayed packet)
+			// we create a new packetEntry that will be filed with the relative information, once the delayed packet is recieved
+			packetEntry* delayedEntry = (packetEntry*)malloc(sizeof(packetEntry)); 
+			delayedEntry->delay=id; // the delay stores the id in which the packet should of arrived, 
+						// and thus will be used when the actual packet arrive to calculate the delay
+			delayedEntry->sequence= expected_seq;
+			delayedEntry->next = NULL;
+			add_Entry(&g_entries,&delayedEntry);
+
+		}			
+		
+		expected_seq = (entry->tcpHeader->seq-initial_reciever_seq)+length;
+		
+		// we go through our list of entries to see if the current packet is a packet we've been looking for
+		packetEntry* current = g_entries;
+		while(current != NULL){
+			if(current->sequence == (entry->tcpHeader->seq-initial_reciever_seq)){ // if it's the case
+				// we store it's information in the packetEntry list
+				current->delay=id-current->delay;
+				current->saddr = entry->saddr;
+				current->daddr = entry->daddr;
+
+				current->ID = id;
+				current->tcpHeader = entry->tcpHeader;
+
+
+				if(entry->delay >= 3){
+					current->retransmission = 1;
+				}else{
+					current->retransmission = 0;
+				}
+
+
+			}
+			current = current->next;
+		}
+
+	}
 }
 
 
@@ -134,14 +167,14 @@ void add_Entry(packetEntry** root,packetEntry** newEntry){
 		return; // done
 	}
 
-	
+
 	// we loop through all the elements until we arrive to last element (where our newEntry will be attached)
 	while( entry->next != NULL){
 		entry = entry->next;		
 	}
 	//we attache our new Entry
 	entry->next = *newEntry;
-	
+
 }
 void free_Entry(packetEntry** root){
 	packetEntry* previous; // Parent Entry
@@ -156,5 +189,5 @@ void free_Entry(packetEntry** root){
 		entry = previous->next;
 		free(previous);
 	}
-	
+
 }
