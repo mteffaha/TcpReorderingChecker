@@ -1,15 +1,17 @@
+# Variables
 CC=gcc
-lDFLAGS=
-CFLAGS= -c -Wall
+LDFLAGS= -lpcap
+CFLAGS= -Wall 
 OUT=trc
 LIBS=
 RM= rm -fr
+
+# Compile all c files
 SRC= $(wildcard *.c)
-OBJ= $(SRC: .c=.o)
+#OBJ= $(SRC: .c=.o)
 
-all: $(OBJ)
+all: dispatcher.o main.o
 	$(CC) $^ $(LDFLAGS) -o $(OUT)
-
 
 clean:
 	$(RM) *.o
